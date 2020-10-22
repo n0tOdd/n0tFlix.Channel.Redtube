@@ -7,10 +7,12 @@ using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.MediaInfo;
 using MediaBrowser.Model.Serialization;
+using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
 using n0tFlix.Helpers.YoutubeDL.Models;
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -23,7 +25,7 @@ using static n0tFlix.Channel.Redtube.Models.Info;
 
 namespace n0tFlix.Channel.Redtube
 {
-    public class Channel : IChannel, IRequiresMediaInfoCallback
+    public class Channel : IChannel, IRequiresMediaInfoCallback, ISupportsLatestMedia
     {
         private readonly IHttpClient _httpClient;
         private readonly ILogger _logger;
@@ -215,7 +217,7 @@ namespace n0tFlix.Channel.Redtube
         {
             switch (type)
             {
-                case ImageType.Thumb:
+                case ImageType.Primary:
                     {
                         var path = GetType().Namespace + ".Images.logo.png";
 
@@ -236,8 +238,17 @@ namespace n0tFlix.Channel.Redtube
         {
             return new List<ImageType>
             {
-                ImageType.Thumb
+                ImageType.Primary
             };
+        }
+
+        public async Task<IEnumerable<ChannelItemInfo>> GetLatestMedia(ChannelLatestMediaSearch request, CancellationToken cancellationToken)
+        {
+            var tmp = await GetCategories(cancellationToken);
+            int i = (int)(tmp.TotalRecordCount - 1);
+            var videos = await GetVideos(new InternalChannelItemQuery() { FolderId = new Random(DateTime.Now.Millisecond).Next(0, i).ToString() }, cancellationToken);
+            List<ChannelItemInfo> list = videos.Items;
+            return videos.Items;
         }
     }
 }
