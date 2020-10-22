@@ -1,5 +1,4 @@
-﻿using HtmlAgilityPack;
-using MediaBrowser.Common.Net;
+﻿using MediaBrowser.Common.Net;
 using MediaBrowser.Controller.Channels;
 using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Channels;
@@ -169,38 +168,6 @@ namespace n0tFlix.Channel.Redtube
             {
                 Items = items.ToList(),
                 TotalRecordCount = total
-            };
-        }
-
-        private async Task<ChannelItemResult> GetTags(CancellationToken cancellationToken)
-        {
-            var items = new List<ChannelItemInfo>();
-            var page = new HtmlDocument();
-
-            using (var site = await _httpClient.Get(new HttpRequestOptions() { Url = "http://www.beeg.com/" }))
-            {
-                page.Load(site, Encoding.UTF8);
-                if (page.DocumentNode != null)
-                {
-                    foreach (var node in page.DocumentNode.SelectNodes("//a[contains(@href, \"tag\")]"))
-                    {
-                        var title = node.InnerText;
-                        var url = node.Attributes["href"].Value;
-
-                        items.Add(new ChannelItemInfo
-                        {
-                            Name = title,
-                            Id = "video_" + "http://www.beeg.com" + url,
-                            Type = ChannelItemType.Folder,
-                            OfficialRating = "GB-18"
-                        });
-                    }
-                }
-            }
-
-            return new ChannelItemResult
-            {
-                Items = items.ToList()
             };
         }
 
