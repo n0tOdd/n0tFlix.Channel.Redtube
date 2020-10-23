@@ -16,10 +16,7 @@
 	  <PackageReference Include="Jellyfin.Common" Version="10.6.0" />
 	  <PackageReference Include="Jellyfin.Controller" Version="10.6.0" />
 	  <PackageReference Include="Microsoft.Win32.Registry" Version="4.7.0" />
+	  <PackageReference Include="Newtonsoft.Json" Version="12.0.3" />
 	  <PackageReference Include="System.Security.Permissions" Version="4.7.0" />
-	</ItemGroup>
-
-	<ItemGroup>
-	  <ProjectReference Include="..\n0tFlix.Helpers.YoutubeDL\n0tFlix.Helpers.YoutubeDL.csproj" />
 	</ItemGroup>
 </Project>

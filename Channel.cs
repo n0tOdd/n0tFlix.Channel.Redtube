@@ -1,42 +1,48 @@
 ﻿using MediaBrowser.Common.Net;
 using MediaBrowser.Controller.Channels;
+using MediaBrowser.Controller.Net;
 using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Channels;
 using MediaBrowser.Model.Drawing;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.MediaInfo;
+using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Serialization;
 using MediaBrowser.Model.Tasks;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
-using n0tFlix.Helpers.YoutubeDL.Models;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Web;
 using static n0tFlix.Channel.Redtube.Models.Info;
 
 namespace n0tFlix.Channel.Redtube
 {
     public class Channel : IChannel, IRequiresMediaInfoCallback, ISupportsLatestMedia
     {
-        private readonly IHttpClient _httpClient;
         private readonly ILogger _logger;
-        private readonly IJsonSerializer _jsonSerializer;
+        private readonly IJsonSerializer jsonSerializer;
+        private readonly IMemoryCache memoryCache;
         public ChannelParentalRating ParentalRating => ChannelParentalRating.Adult;
+        private readonly IHttpClient _httpClient;
 
-        public Channel(IHttpClient httpClient, IJsonSerializer jsonSerializer, ILogger<Channel> logger)
+        public Channel(IHttpClient httpClient, IJsonSerializer jsonSerializer, ILogger<Channel> logger, IMemoryCache memoryCache)
         {
-            _httpClient = httpClient;
             _logger = logger;
-            _jsonSerializer = jsonSerializer;
+            this.jsonSerializer = jsonSerializer;
+            this.memoryCache = memoryCache;
         }
 
         public string Name { get { return Plugin.Instance.Name; } }
@@ -69,7 +75,18 @@ namespace n0tFlix.Channel.Redtube
                 {
                     ChannelMediaType.Video
                 },
-                MaxPageSize = 20
+                MaxPageSize = 20,
+                SupportsContentDownloading = true,
+                AutoRefreshLevels = 10,
+                DefaultSortFields = new List<ChannelItemSortField>()
+                {
+                    ChannelItemSortField.CommunityRating,
+                   ChannelItemSortField.DateCreated,
+                    ChannelItemSortField.Name,
+                     ChannelItemSortField.PremiereDate,
+                      ChannelItemSortField.Runtime,
+                },
+                SupportsSortOrderToggle = true
             };
         }
 
@@ -80,9 +97,13 @@ namespace n0tFlix.Channel.Redtube
 
         public async Task<ChannelItemResult> GetChannelItems(InternalChannelItemQuery query, CancellationToken cancellationToken)
         {
-            _logger.LogDebug("cat ID : " + query.FolderId);
+            _logger.LogInformation("cat ID : " + query.FolderId);
             if (query.FolderId == null)
             {
+                if (memoryCache.TryGetValue("categories", out ChannelItemResult ii))
+                {
+                    return ii;
+                }
                 return await GetCategories(cancellationToken).ConfigureAwait(false);
             }
             var catSplit = query.FolderId.Split('_');
@@ -96,29 +117,38 @@ namespace n0tFlix.Channel.Redtube
 
         private async Task<ChannelItemResult> GetCategories(CancellationToken cancellationToken)
         {
-            var items = new List<ChannelItemInfo>();
-
-            using (var site = await _httpClient.Get(new HttpRequestOptions() { Url = "http://api.redtube.com/?data=redtube.Categories.getCategoriesList&output=json" }))
+            if (memoryCache.TryGetValue("categories-redtube", out ChannelItemResult o))
             {
-                var categories = _jsonSerializer.DeserializeFromStream<RootObject>(site);
+                return o;
+            }
+            var items = new List<ChannelItemInfo>();
+            HttpClientHandler httpClientHandler = new HttpClientHandler() { CheckCertificateRevocationList = false, ClientCertificateOptions = ClientCertificateOption.Automatic };
+            httpClientHandler.ServerCertificateCustomValidationCallback += (sender, cert, chain, sslPolicyErrors) => true;
 
-                foreach (var c in categories.categories)
+            string site = await new HttpClient(httpClientHandler).GetStringAsync("http://api.redtube.com/?data=redtube.Categories.getCategoriesList&output=json");
+
+            _logger.LogInformation(site);
+            var categories = jsonSerializer.DeserializeFromString<RootObject>(site);
+
+            foreach (var c in categories.categories)
+            {
+                if (c.category != "japanesecensored")
                 {
-                    if (c.category != "japanesecensored")
+                    items.Add(new ChannelItemInfo
                     {
-                        items.Add(new ChannelItemInfo
-                        {
-                            Name = c.category.Substring(0, 1).ToUpper() + c.category.Substring(1),
-                            Id = "videos_" + c.category,
-                            Type = ChannelItemType.Folder,
-                            ImageUrl =
-                                "http://img.l3.cdn.redtubefiles.com/_thumbs/categories/categories-180x135/" + c.category.ToLower() +
-                                "_001.jpg"
-                        });
-                    }
+                        Name = c.category,//.Substring(0, 1).ToUpper() + c.category.Substring(1),
+                        Id = "videos_" + c.category,
+                        Type = ChannelItemType.Folder,
+                        FolderType = ChannelFolderType.Container,
+
+                        ImageUrl = "https://ei.rdtcdn.com/www-static/cdn_files/redtube/images/pc/category/" + c.category.ToLower().Replace(" ", "") + "_001.jpg"
+                    });
                 }
             }
-
+            memoryCache.Set("categories-redtube", new ChannelItemResult
+            {
+                Items = items.ToList()
+            }, DateTimeOffset.Now.AddDays(7));
             return new ChannelItemResult
             {
                 Items = items.ToList()
@@ -127,97 +157,89 @@ namespace n0tFlix.Channel.Redtube
 
         private async Task<ChannelItemResult> GetVideos(InternalChannelItemQuery query, CancellationToken cancellationToken)
         {
+            if (memoryCache.TryGetValue("redtube-" + query.FolderId, out ChannelItemResult o))
+            {
+                return o;
+            }
             var items = new List<ChannelItemInfo>();
             int total = 0;
-
-            int? page = null;
-
-            if (query.StartIndex.HasValue && query.Limit.HasValue)
+            HttpClientHandler httpClientHandler = new HttpClientHandler() { CheckCertificateRevocationList = false, ClientCertificateOptions = ClientCertificateOption.Automatic };
+            httpClientHandler.ServerCertificateCustomValidationCallback += (sender, cert, chain, sslPolicyErrors) => true;
+            for (int i = 1; 20 > i; i++)
             {
-                page = 1 + (query.StartIndex.Value / query.Limit.Value) % query.Limit.Value;
-            }
-            for (int i = 0; 5 >= i; i++)
-            {
-                using (var site = await _httpClient.Get(new HttpRequestOptions() { Url = String.Format("http://api.redtube.com/?data=redtube.Videos.searchVideos&output=json&category={0}&ordering=newest&thumbsize=large&page={1}", query.FolderId, i) }))
+                string site = await new HttpClient(httpClientHandler).GetStringAsync(String.Format("http://api.redtube.com/?data=redtube.Videos.searchVideos&output=json&category={0}&ordering=newest&thumbsize=medium2&page={1}", query.FolderId.Replace("videos_", "").Replace(" ", "%20"), i.ToString()));
+
+                var videos = jsonSerializer.DeserializeFromString<RootObject>(site);
+
+                total = total + videos.count;
+
+                foreach (var v in videos.videos)
                 {
-                    var videos = _jsonSerializer.DeserializeFromStream<RootObject>(site);
+                    var durationNode = v.video.duration.Split(':');
+                    var time = Convert.ToDouble(durationNode[0] + "." + durationNode[1]);
 
-                    total = total + videos.count;
-
-                    foreach (var v in videos.videos)
+                    items.Add(new ChannelItemInfo
                     {
-                        var durationNode = v.video.duration.Split(':');
-                        _logger.LogDebug(durationNode[0] + "." + durationNode[1]);
-                        var time = Convert.ToDouble(durationNode[0] + "." + durationNode[1]);
+                        Type = ChannelItemType.Media,
+                        ContentType = ChannelMediaContentType.Clip,
+                        MediaType = ChannelMediaType.Video,
+                        FolderType = ChannelFolderType.Container,
 
-                        items.Add(new ChannelItemInfo
-                        {
-                            Type = ChannelItemType.Media,
-                            ContentType = ChannelMediaContentType.Clip,
-                            MediaType = ChannelMediaType.Video,
-                            ImageUrl = v.video.default_thumb.Replace("m.jpg", "b.jpg"),
-                            Name = v.video.title,
-                            Id = v.video.url,
-                            RunTimeTicks = TimeSpan.FromMinutes(time).Ticks,
-                            //Tags = v.video.tags == null ? new List<string>() : v.video.tags.Select(t => t.title).ToList(),
-                            DateCreated = DateTime.Parse(v.video.publish_date),
-                            CommunityRating = float.Parse(v.video.rating)
-                        });
-                    }
+                        ImageUrl = v.video.default_thumb.Replace("m.jpg", "b.jpg"),
+                        Name = v.video.title,
+                        Id = v.video.video_id,
+                        HomePageUrl = v.video.url,
+                        RunTimeTicks = TimeSpan.FromMinutes(time).Ticks,
+                        //     MediaSources = GetChannelItemMediaInfo(v.video.video_id, cancellationToken).Result.ToList(),
+                        //Tags = v.video.tags == null ? new List<string>() : v.video.tags.Select(t => t.title).ToList(),
+                        DateCreated = DateTime.Parse(v.video.publish_date),
+                        CommunityRating = float.Parse(v.video.rating)
+                    });
                 }
             }
-            return new ChannelItemResult
+            var finish = new ChannelItemResult
             {
                 Items = items.ToList(),
                 TotalRecordCount = total
             };
+            memoryCache.Set("redtube-" + query.FolderId, finish, DateTimeOffset.Now.AddHours(6));
+            return finish;
         }
 
         public async Task<IEnumerable<MediaSourceInfo>> GetChannelItemMediaInfo(string id, CancellationToken cancellationToken)
         {
-            string path = string.Empty;
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            HttpClientHandler httpClientHandler = new HttpClientHandler()
             {
-                if (!Directory.Exists(Path.Combine(Plugin.Instance.DataFolderPath, "Youtube-dl")))
-                    Directory.CreateDirectory(Path.Combine(Plugin.Instance.DataFolderPath, "Youtube-dl"));
-                if (!File.Exists(Path.Combine(Plugin.Instance.DataFolderPath, "Youtube-dl", "youtube-dl.exe")))
-                    new WebClient()
-                        .DownloadFile("https://yt-dl.org/downloads/latest/youtube-dl.exe", Path.Combine(Plugin.Instance.DataFolderPath, "Youtube-dl", "youtube-dl.exe"));
-                path = Path.Combine(Plugin.Instance.DataFolderPath, "Youtube-dl", "youtube-dl.exe");
-            }
-            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                CheckCertificateRevocationList = false,
+            };
+            httpClientHandler.ServerCertificateCustomValidationCallback += (sender, cert, chain, sslPolicyErrors) => { return true; };
+            var html = new WebClient().DownloadString("https://embed.redtube.com/?id=" + id);
+            html = html.Substring(html.IndexOf("mediaDefinitions"));
+            html = "{\"" + html.Substring(0, html.IndexOf(",\"video_unavailable")) + "}";
+            Models.MediaInfo.root root = JsonConvert.DeserializeObject<Models.MediaInfo.root>(html);
+            List<MediaSourceInfo> mediaSourceInfos = new List<MediaSourceInfo>();
+            foreach (var aa in root.MediaDefinitions)
             {
-                if (!Directory.Exists(Path.Combine(Plugin.Instance.DataFolderPath, "Youtube-dl")))
-                    Directory.CreateDirectory(Path.Combine(Plugin.Instance.DataFolderPath, "Youtube-dl"));
-                if (!File.Exists(Path.Combine(Plugin.Instance.DataFolderPath, "Youtube-dl", "youtube-dl")))
-                    new WebClient()
-                        .DownloadFile("https://yt-dl.org/downloads/latest/youtube-dl", Path.Combine(Plugin.Instance.DataFolderPath, "Youtube-dl", "youtube-dl"));
-                path = Path.Combine(Plugin.Instance.DataFolderPath, "Youtube-dl", "youtube-dl");
-            }
+                mediaSourceInfos.Add(new MediaSourceInfo()
+                {
+                    Id = aa.VideoUrl,
+                    Path = aa.VideoUrl,
+                    IsRemote = true,
+                    VideoType = VideoType.VideoFile,
+                    EncoderProtocol = MediaProtocol.File,
 
-            n0tFlix.Helpers.YoutubeDL.YoutubeDL youtubeDL = new Helpers.YoutubeDL.YoutubeDL(path);
-            youtubeDL.Options.VerbositySimulationOptions.GetUrl = true;
-            DownloadInfo downloadInfo = await youtubeDL.GetDownloadInfoAsync(id);
-            VideoDownloadInfo video = downloadInfo as VideoDownloadInfo;
-            _logger.LogInformation(video.Url);
-            return new List<MediaSourceInfo>
-                    {
-                        new MediaSourceInfo
-                        {
-                            Id = video.Id,
-                            Path = video.Url,
-                            IsRemote = true,
-                            Protocol = MediaProtocol.File,
-                            EncoderProtocol = MediaProtocol.File
-                        }
-                    };
+                    Protocol = MediaProtocol.File,
+                }); ;
+            }
+            return mediaSourceInfos;
         }
 
         public Task<DynamicImageResponse> GetChannelImage(ImageType type, CancellationToken cancellationToken)
         {
             switch (type)
             {
-                case ImageType.Primary:
+                case
+                ImageType.Primary:
                     {
                         var path = GetType().Namespace + ".Images.logo.png";
 
@@ -229,6 +251,20 @@ namespace n0tFlix.Channel.Redtube
                             Stream = GetType().Assembly.GetManifestResourceStream(path)
                         });
                     }
+                case
+                ImageType.Thumb:
+                    {
+                        var path = GetType().Namespace + ".Images.logo.png";
+
+                        return Task.FromResult(new DynamicImageResponse
+                        {
+                            Format = ImageFormat.Png,
+                            HasImage = true,
+
+                            Stream = GetType().Assembly.GetManifestResourceStream(path)
+                        });
+                    }
+
                 default:
                     throw new ArgumentException("Unsupported image type: " + type);
             }
@@ -238,7 +274,8 @@ namespace n0tFlix.Channel.Redtube
         {
             return new List<ImageType>
             {
-                ImageType.Primary
+                ImageType.Primary,
+                ImageType.Thumb
             };
         }
 

@@ -2,11 +2,8 @@ E:\Git\n0tFlix.Channel.Redtube\bin\Release\netstandard2.1\n0tFlix.Channel.Redtub
 E:\Git\n0tFlix.Channel.Redtube\bin\Release\netstandard2.1\n0tFlix.Channel.Redtube.dll
 E:\Git\n0tFlix.Channel.Redtube\obj\Release\netstandard2.1\n0tFlix.Channel.Redtube.AssemblyInfoInputs.cache
 E:\Git\n0tFlix.Channel.Redtube\obj\Release\netstandard2.1\n0tFlix.Channel.Redtube.AssemblyInfo.cs
-E:\Git\n0tFlix.Channel.Redtube\obj\Release\netstandard2.1\n0tFlix.Channel.Redtube.csproj.CoreCompileInputs.cache
 E:\Git\n0tFlix.Channel.Redtube\obj\Release\netstandard2.1\n0tFlix.Channel.Redtube.csprojAssemblyReference.cache
 E:\Git\n0tFlix.Channel.Redtube\bin\Release\netstandard2.1\n0tFlix.Channel.Redtube.pdb
 E:\Git\n0tFlix.Channel.Redtube\obj\Release\netstandard2.1\n0tFlix.Channel.Redtube.dll
 E:\Git\n0tFlix.Channel.Redtube\obj\Release\netstandard2.1\n0tFlix.Channel.Redtube.pdb
-E:\Git\n0tFlix.Channel.Redtube\bin\Release\netstandard2.1\n0tFlix.Helpers.YoutubeDL.dll
-E:\Git\n0tFlix.Channel.Redtube\bin\Release\netstandard2.1\n0tFlix.Helpers.YoutubeDL.pdb
-E:\Git\n0tFlix.Channel.Redtube\obj\Release\netstandard2.1\n0tFlix.Channel.Redtube.csproj.CopyComplete
+E:\Git\n0tFlix.Channel.Redtube\obj\Release\netstandard2.1\n0tFlix.Channel.Redtube.csproj.CoreCompileInputs.cache
